@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # сам Prometheus
+  - job_name: prometheus
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  # Loki внутренние метрики
+  - job_name: loki
+    static_configs:
+      - targets: ['loki:3100']
+
+  # Node Exporter (хост)
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # cAdvisor (контейнеры)
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # (по желанию) exporter’ы Keycloak, Postgres и т.д. добавишь позже

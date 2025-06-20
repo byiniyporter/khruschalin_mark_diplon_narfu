@@ -1,0 +1,5 @@
+nginx/certbot/conf/archive/
+nginx/certbot/conf/live/
+nginx/certbot/conf/accounts/
+nginx/certbot/
+monitoring/loki-data/

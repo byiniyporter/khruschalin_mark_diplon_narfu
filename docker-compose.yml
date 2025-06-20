@@ -1,0 +1,218 @@
+version: "3.9"
+
+services:
+  # --- БД под Keycloak ---
+  postgres:
+    image: postgres:16
+    container_name: keycloak_postgres
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    networks:
+      - backend
+
+  # --- БД под магазин ---
+  shop-postgres:
+    image: postgres:16
+    container_name: shop_postgres
+    environment:
+      POSTGRES_DB: shop
+      POSTGRES_USER: shopuser
+      POSTGRES_PASSWORD: shoppass
+    volumes:
+      - shop_pg_data:/var/lib/postgresql/data
+    restart: always
+    networks:
+      - backend
+
+  # --- Keycloak ---
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.2
+    container_name: keycloak
+    depends_on:
+      - postgres
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    command:
+      - start-dev
+      - --hostname-url=https://so-s.duckdns.org/auth/
+    ports:
+      - "8080:8080"
+    restart: always
+    networks:
+      - backend
+
+  # --- MeiliSearch ---
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
+    container_name: meilisearch
+    environment:
+      MEILI_MASTER_KEY: supersecretkey
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+    restart: always
+    networks:
+      - backend
+
+  # --- Синхронизация с MeiliSearch ---
+  meili-sync:
+    build:
+      context: ./meili-sync
+    depends_on:
+      - meilisearch
+      - shop-postgres
+    restart: "no"
+    networks:
+      - backend
+
+  # --- Фронтенд ---
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    restart: always
+    networks:
+      - backend
+
+  # --- NGINX + Let's Encrypt ---
+  nginx:
+    image: nginx:latest
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/data:/var/www/certbot
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+      - ./frontend/dist:/usr/share/nginx/html
+    depends_on:
+      - frontend
+      - keycloak
+      - meilisearch
+    restart: always
+    networks:
+      - backend
+
+  # --- Certbot (одноразовый запуск) ---
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/certbot/www:/var/www/certbot
+    command: >
+      certonly --webroot
+      --webroot-path=/var/www/certbot
+      --email byiniyporter@gmail.com
+      --agree-tos
+      --no-eff-email
+      -d so-s.duckdns.org
+
+  # --- Loki ---
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: loki
+    command: -config.file=/etc/loki/loki-config.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yaml:/etc/loki/loki-config.yaml
+      - ./monitoring/loki-data:/loki
+      - type: tmpfs   # WAL пусть остаётся в RAM
+        target: /wal
+    networks:
+      - backend
+
+  # --- Promtail ---
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: promtail
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    volumes:
+      - ./monitoring/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - loki
+    networks:
+      - backend
+
+  # --- Prometheus ---
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - backend
+
+  # --- Grafana ---
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - backend
+
+  node-exporter:
+    image: prom/node-exporter:latest   # ← рабочий тег
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    networks:
+      - backend
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: cadvisor
+    ports:
+      - "8081:8080"           # наружу, если хочешь web-UI
+    networks:
+      - backend
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+volumes:
+  postgres_data:
+  shop_pg_data:
+  meili_data:
+  grafana-storage:
+  loki-data:
+  loki-wal:
+
+networks:
+  backend:
