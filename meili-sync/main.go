@@ -53,5 +53,5 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Println("✅ Успешно отправлено в MeiliSearch")
+	fmt.Println("Успешно отправлено в MeiliSearch")
 }
